@@ -164,6 +164,138 @@ The account name can be given either as an `?account=` query parameter or in the
 Omitting it returns `400 whatsapp_account is required`; an unknown name returns `404`. If Meta
 cannot be reached, the endpoint returns `502`.
 
+## Preview Template Migration
+
+List the templates on a source WABA and report which ones Meta will accept for migration into the
+destination account. Read-only. Requires `templates:read`.
+
+```bash
+POST /api/templates/migrate/preview
+```
+
+### Request Body
+
+Give exactly one of `source_whatsapp_account` (another connected account, read with its own token)
+or `source_waba_id` (any WABA under the same Meta Business, read with the destination's token).
+
+```json
+{
+  "whatsapp_account": "Main Business",
+  "source_whatsapp_account": "Old Provider Account"
+}
+```
+
+### Response
+
+```json
+{
+  "status": "success",
+  "data": {
+    "source_waba_id": "102290129340398",
+    "source_label": "Old Provider Account",
+    "destination_waba_id": "104996122399160",
+    "total": 2,
+    "eligible": 1,
+    "templates": [
+      {
+        "id": "1473688840035974",
+        "name": "order_update",
+        "language": "en",
+        "category": "UTILITY",
+        "status": "APPROVED",
+        "quality_rating": "GREEN",
+        "eligible": true,
+        "exists_on_destination": false
+      },
+      {
+        "id": "6162904357082268",
+        "name": "promo",
+        "language": "en",
+        "category": "MARKETING",
+        "status": "APPROVED",
+        "quality_rating": "RED",
+        "eligible": false,
+        "reason": "Quality rating must be GREEN or UNKNOWN (rating is RED)",
+        "exists_on_destination": true
+      }
+    ]
+  }
+}
+```
+
+`eligible` follows Meta's rules: status `APPROVED` and quality `GREEN` or `UNKNOWN` (a missing
+rating counts as `UNKNOWN`). `exists_on_destination` flags a name + language already present on the
+destination; such templates are still selectable because Meta's documentation does not state how
+duplicates are treated.
+
+Returns `400` when the destination or source is missing, both sources are given, or source and
+destination are the same WABA; `404` for an unknown account; `502` when Meta cannot be reached.
+
+## Migrate Templates
+
+Copy templates from a source WABA into the destination account's WABA using Meta's
+`migrate_message_templates` API, then sync the destination. Requires `templates:write`.
+
+```bash
+POST /api/templates/migrate
+```
+
+### Request Body
+
+```json
+{
+  "whatsapp_account": "Main Business",
+  "source_waba_id": "102290129340398",
+  "template_ids": ["1473688840035974", "6162904357082268"]
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `whatsapp_account` | string | Yes | Destination account name. |
+| `source_whatsapp_account` | string | One of | Connected account to copy from. |
+| `source_waba_id` | string | One of | WABA ID to copy from (same Meta Business). |
+| `template_ids` | array | No | Source template IDs to migrate, sent to Meta in chunks of 100. Omit to migrate every eligible template: Whatomate lists the source and sends the IDs that pass the preview's eligibility rules. An array with only blank strings returns `400`. |
+
+### Response
+
+```json
+{
+  "status": "success",
+  "data": {
+    "message": "Migrated 1 template(s), 1 failed",
+    "source_waba_id": "102290129340398",
+    "destination_waba_id": "104996122399160",
+    "requested_count": 2,
+    "skipped_count": 0,
+    "migrated_count": 1,
+    "failed_count": 1,
+    "migrated_templates": ["9001234567890123"],
+    "failed_templates": {
+      "6162904357082268": "Incorrect category"
+    },
+    "synced_count": 12
+  }
+}
+```
+
+`migrated_templates` holds the **new** template IDs on the destination; `failed_templates` is keyed
+by **source** template ID with Meta's reason. `requested_count` is how many IDs were sent and
+`skipped_count` how many source templates the eligibility rules left out when `template_ids` was
+omitted. `synced_count` is the number of destination templates upserted locally afterwards; if that
+sync fails the migration still succeeded and `sync_error` says why.
+
+If Meta rejects a call part-way through, the endpoint returns `502` and the error envelope's `data`
+carries the partial counts, since templates already migrated stay migrated. A timeout is reported
+the same way with a message saying Meta may still have completed the work. Templates are recreated
+on the destination and the source is never modified.
+
+<Aside type="caution">
+  Both WABAs must belong to the same Meta Business, and the source WABA must be assigned to the
+  system user whose token the destination account uses. Migrated templates start with an `UNKNOWN`
+  quality rating until Meta assigns a new one.
+</Aside>
+
 ## Submit Template
 
 Submit a template for Meta approval.

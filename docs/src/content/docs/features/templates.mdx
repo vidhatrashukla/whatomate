@@ -25,6 +25,37 @@ The templates page displays all your synced templates from Meta's WhatsApp Busin
 
 Click the **Sync from Meta** button to fetch the latest templates from your WhatsApp Business Account. This ensures your local templates are always up to date with what's approved in Meta.
 
+### Migrating templates from another WABA
+
+If you already have approved templates on another WhatsApp Business Account under your Meta
+Business — for example a WABA you are consolidating, or one a previous provider set up inside your
+own business — you can copy them into an account connected to Whatomate instead of recreating each
+one. Click **Migrate from WABA** on the
+templates page with the destination account selected, then choose the source:
+
+- **Another connected account** — any other account in your organization. Its own token is used to
+  list its templates.
+- **A WABA ID** — any WABA under the same Meta Business, connected or not. The destination
+  account's token is used to read it.
+
+Whatomate previews the source's templates and marks which ones Meta will accept: the template must
+be `APPROVED` with a `GREEN` or `UNKNOWN` quality rating. Templates whose name and language already
+exist on the destination are flagged and unchecked by default. Pick the templates, click
+**Migrate**, and Whatomate calls Meta's
+[template migration API](https://developers.facebook.com/docs/whatsapp/business-management-api/message-templates/template-migration/),
+then syncs the destination so the copies show up in the list. Meta reports per-template failures
+(its own examples are "Incorrect category" and "Formatting error - dangling parameter"); these are
+listed at the end.
+
+<Aside type="caution">
+  Both WABAs must belong to the **same Meta Business**, and the source WABA must be assigned to the
+  system user whose token the destination account uses (Business Settings → Users → System users →
+  Assign assets). A WABA owned by a provider's Meta Business — common for BSP-hosted numbers — is
+  not visible to your token at all and cannot be migrated from; check ownership under Business
+  Settings → Accounts → WhatsApp Accounts. Migrated templates keep their approval but start with an
+  `UNKNOWN` quality rating until Meta assigns a new one. The source WABA is not modified.
+</Aside>
+
 ### Template Editor
 
 ![Template Editor](/whatomate/images/12-template-editor.png)

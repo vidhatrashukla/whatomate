@@ -11,8 +11,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { PageHeader, SearchInput, DataTable, IconButton, DeleteConfirmDialog, ErrorState, type Column } from '@/components/shared'
 import { api, templatesService } from '@/services/api'
 import { useOrganizationsStore } from '@/stores/organizations'
+import { useAuthStore } from '@/stores/auth'
+import MigrateTemplatesDialog from '@/components/templates/MigrateTemplatesDialog.vue'
 import { toast } from 'vue-sonner'
-import { Plus, RefreshCw, FileText, Pencil, Trash2, Loader2, MessageSquare, Image, FileIcon, Video } from 'lucide-vue-next'
+import { Plus, RefreshCw, FileText, Pencil, Trash2, Loader2, MessageSquare, Image, FileIcon, Video, ArrowRightLeft } from 'lucide-vue-next'
 import { getErrorMessage } from '@/lib/api-utils'
 import { useSearchPagination } from '@/composables/useSearchPagination'
 import { getQualityBadgeClass, getQualityRatingLabel } from '@/lib/utils'
@@ -23,6 +25,7 @@ interface WhatsAppAccount {
   id: string
   name: string
   phone_id: string
+  business_id?: string
 }
 
 interface Template {
@@ -46,6 +49,8 @@ interface Template {
 }
 
 const organizationsStore = useOrganizationsStore()
+const authStore = useAuthStore()
+const canWriteTemplates = computed(() => authStore.hasPermission('templates', 'write'))
 
 const templates = ref<Template[]>([])
 const accounts = ref<WhatsAppAccount[]>([])
@@ -53,6 +58,10 @@ const isLoading = ref(true)
 const error = ref<string | null>(null)
 const isSyncing = ref(false)
 const selectedAccount = ref<string>(localStorage.getItem('templates_selected_account') || 'all')
+
+// Migrate-from-WABA dialog state
+const migrateDialogOpen = ref(false)
+const hasSpecificAccount = computed(() => !!selectedAccount.value && selectedAccount.value !== 'all')
 
 // Delete dialog state
 const deleteDialogOpen = ref(false)
@@ -229,6 +238,10 @@ async function syncTemplates() {
   }
 }
 
+async function onTemplatesMigrated() {
+  await fetchTemplates()
+}
+
 function openDeleteDialog(template: Template) {
   templateToDelete.value = template
   deleteDialogOpen.value = true
@@ -302,6 +315,16 @@ function getHeaderIcon(type: string) {
           <Loader2 v-if="isSyncing" class="h-4 w-4 mr-2 animate-spin" />
           <RefreshCw v-else class="h-4 w-4 mr-2" />
           {{ $t('templates.syncFromMeta') }}
+        </Button>
+        <Button
+          v-if="canWriteTemplates"
+          variant="outline"
+          size="sm"
+          :disabled="!hasSpecificAccount"
+          @click="migrateDialogOpen = true"
+        >
+          <ArrowRightLeft class="h-4 w-4 mr-2" />
+          {{ $t('templates.migrate.button') }}
         </Button>
         <RouterLink to="/templates/new">
           <Button variant="outline" size="sm">
@@ -433,6 +456,14 @@ function getHeaderIcon(type: string) {
         </div>
       </div>
     </ScrollArea>
+
+    <!-- Migrate templates from another WABA -->
+    <MigrateTemplatesDialog
+      v-model:open="migrateDialogOpen"
+      :destination-account="selectedAccount"
+      :accounts="accounts"
+      @migrated="onTemplatesMigrated"
+    />
 
     <!-- Delete Confirmation Dialog -->
     <DeleteConfirmDialog

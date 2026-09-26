@@ -1,4 +1,5 @@
 import axios, { type AxiosInstance, type AxiosError, type InternalAxiosRequestConfig } from 'axios'
+import type { MigrationPreviewItem, MigrationResult } from '@/lib/templateMigration'
 
 // Get base path from server-injected config or fallback
 const basePath = ((window as any).__BASE_PATH__ ?? '').replace(/\/$/, '')
@@ -317,10 +318,38 @@ export const messagesService = {
     api.post(`/contacts/${contactId}/messages/${messageId}/reaction`, { emoji })
 }
 
+export interface TemplateMigrationSource {
+  /** Destination account name (the WABA templates are copied into). */
+  whatsapp_account: string
+  /** A connected account to copy from; mutually exclusive with source_waba_id. */
+  source_whatsapp_account?: string
+  /** A raw WABA ID under the same Meta Business; mutually exclusive with source_whatsapp_account. */
+  source_waba_id?: string
+}
+
+export interface TemplateMigrationPreview {
+  source_waba_id: string
+  source_label: string
+  destination_waba_id: string
+  templates: MigrationPreviewItem[]
+  total: number
+  eligible: number
+}
+
+export interface TemplateMigrationResult extends MigrationResult {
+  message?: string
+  source_waba_id: string
+  destination_waba_id: string
+}
+
 export const templatesService = {
   list: (params?: { status?: string; category?: string; account?: string; search?: string; page?: number; limit?: number }) =>
     api.get<{ templates: any[]; total?: number }>('/templates', { params }),
   get: (id: string) => api.get(`/templates/${id}`),
+  migratePreview: (data: TemplateMigrationSource) =>
+    api.post<{ data: TemplateMigrationPreview }>('/templates/migrate/preview', data),
+  migrate: (data: TemplateMigrationSource & { template_ids?: string[] }) =>
+    api.post<{ data: TemplateMigrationResult }>('/templates/migrate', data),
   uploadMedia: (accountName: string, file: File) => {
     const formData = new FormData()
     formData.append('file', file)

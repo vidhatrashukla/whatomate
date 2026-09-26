@@ -7,6 +7,7 @@ import (
 	"net/http"
 	neturl "net/url"
 	"strings"
+	"time"
 )
 
 // TemplateSubmission represents a template to be submitted to Meta
@@ -451,6 +452,113 @@ func (c *Client) DeleteTemplate(ctx context.Context, account *Account, templateN
 
 	c.Log.Info("Template deleted from Meta", "template", templateName)
 	return nil
+}
+
+// MaxMigrateTemplatesPerRequest is Meta's cap on both `template_ids` and
+// `count` for a single migrate_message_templates call.
+const MaxMigrateTemplatesPerRequest = 500
+
+// MigrateTemplatesTimeout is the HTTP timeout for a single migrate call. Meta
+// says a call can exceed 30 seconds (and to reduce `count` when it does), so
+// the client's DefaultTimeout of 30 seconds is not enough here.
+const MigrateTemplatesTimeout = 2 * time.Minute
+
+// MigrateTemplatesOptions selects what to migrate from the source WABA.
+type MigrateTemplatesOptions struct {
+	// SourceWABAID is the WhatsApp Business Account the templates are copied
+	// from. It must belong to the same Meta Business as the destination.
+	SourceWABAID string
+	// PageNumber is the page of the source's template list to migrate when
+	// TemplateIDs is empty (Meta's example starts at 0). It is not sent when
+	// TemplateIDs is set; whether Meta would combine the two is undocumented.
+	PageNumber int
+	// Count is the page size (max MaxMigrateTemplatesPerRequest). Zero lets
+	// Meta apply its default. Meta suggests lowering it when a call exceeds
+	// its 30 second execution limit.
+	Count int
+	// TemplateIDs migrates only these source template IDs (max
+	// MaxMigrateTemplatesPerRequest). Empty migrates by page.
+	TemplateIDs []string
+}
+
+// MigrateTemplatesResult is Meta's response to migrate_message_templates.
+// Keys of FailedTemplates are source template IDs; values are Meta's reason.
+type MigrateTemplatesResult struct {
+	MigratedTemplates []string          `json:"migrated_templates"`
+	FailedTemplates   map[string]string `json:"failed_templates"`
+}
+
+// MigrateTemplates copies approved, good-quality templates from another WABA
+// into account's WABA via POST /{waba_id}/migrate_message_templates. Meta
+// recreates the templates on the destination; the source is untouched. Only
+// templates with status APPROVED and a GREEN or UNKNOWN quality score are
+// eligible, and both WABAs must sit under the same Meta Business.
+//
+// `source_waba_id` (and `page_number`, when migrating by page) travel as query
+// parameters as in Meta's reference request; `count` and `template_ids` go in
+// the JSON body. Meta warns that a call can exceed 30 seconds, so this call
+// uses MigrateTemplatesTimeout instead of the client's default timeout.
+func (c *Client) MigrateTemplates(ctx context.Context, account *Account, opts MigrateTemplatesOptions) (*MigrateTemplatesResult, error) {
+	if strings.TrimSpace(opts.SourceWABAID) == "" {
+		return nil, fmt.Errorf("source WABA ID is required")
+	}
+	if len(opts.TemplateIDs) > MaxMigrateTemplatesPerRequest {
+		return nil, fmt.Errorf("at most %d template IDs can be migrated per request", MaxMigrateTemplatesPerRequest)
+	}
+	if opts.Count < 0 || opts.Count > MaxMigrateTemplatesPerRequest {
+		return nil, fmt.Errorf("count must be between 0 and %d", MaxMigrateTemplatesPerRequest)
+	}
+	if opts.PageNumber < 0 {
+		return nil, fmt.Errorf("page number must not be negative")
+	}
+
+	url := fmt.Sprintf("%s/%s/%s/migrate_message_templates?source_waba_id=%s",
+		c.getBaseURL(), account.APIVersion, account.BusinessID, neturl.QueryEscape(opts.SourceWABAID))
+	if len(opts.TemplateIDs) == 0 {
+		url += fmt.Sprintf("&page_number=%d", opts.PageNumber)
+	}
+
+	var body map[string]any
+	if opts.Count > 0 || len(opts.TemplateIDs) > 0 {
+		body = map[string]any{}
+		if opts.Count > 0 {
+			body["count"] = opts.Count
+		}
+		if len(opts.TemplateIDs) > 0 {
+			body["template_ids"] = opts.TemplateIDs
+		}
+	}
+
+	var payload any
+	if body != nil {
+		payload = body
+	}
+
+	// Meta documents that this call may run long; give it its own budget
+	// without touching the shared client used by every other request.
+	migrateClient := *c.HTTPClient
+	migrateClient.Timeout = MigrateTemplatesTimeout
+	scoped := *c
+	scoped.HTTPClient = &migrateClient
+
+	result, err := doJSON[MigrateTemplatesResult](ctx, &scoped, http.MethodPost, url, payload, account.AccessToken)
+	if err != nil {
+		c.Log.Error("Failed to migrate templates", "error", err, "source_waba_id", opts.SourceWABAID, "destination_waba_id", account.BusinessID)
+		return nil, err
+	}
+	if result.FailedTemplates == nil {
+		result.FailedTemplates = map[string]string{}
+	}
+	if result.MigratedTemplates == nil {
+		result.MigratedTemplates = []string{}
+	}
+
+	c.Log.Info("Migrated templates from source WABA",
+		"source_waba_id", opts.SourceWABAID,
+		"destination_waba_id", account.BusinessID,
+		"migrated", len(result.MigratedTemplates),
+		"failed", len(result.FailedTemplates))
+	return &result, nil
 }
 
 // extractExamplesForComponent extracts example values for a specific component from sample_values
