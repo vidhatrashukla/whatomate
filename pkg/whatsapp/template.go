@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	neturl "net/url"
 	"strings"
 )
 
@@ -386,23 +387,56 @@ func (c *Client) buildStandardComponents(template *TemplateSubmission) ([]map[st
 	return components, nil
 }
 
-// FetchTemplates fetches all templates from Meta's API
+// templateListPageSize is the number of templates requested per page from
+// Meta's message_templates endpoint.
+const templateListPageSize = 100
+
+// maxTemplateListPages bounds cursor pagination in FetchTemplates so a
+// misbehaving API can never keep us looping.
+const maxTemplateListPages = 50
+
+// FetchTemplates fetches all templates from Meta's API, following the
+// `paging.cursors.after` cursor until the account's full template list has
+// been read (bounded by maxTemplateListPages).
 func (c *Client) FetchTemplates(ctx context.Context, account *Account) ([]MetaTemplate, error) {
-	url := fmt.Sprintf("%s?fields=id,name,language,category,status,components,quality_score,quality_rating&limit=100", c.buildTemplatesURL(account))
+	baseURL := fmt.Sprintf("%s?fields=id,name,language,category,status,components,quality_score,quality_rating&limit=%d",
+		c.buildTemplatesURL(account), templateListPageSize)
 
-	respBody, err := c.doRequest(ctx, http.MethodGet, url, nil, account.AccessToken)
-	if err != nil {
-		c.Log.Error("Failed to fetch templates", "error", err)
-		return nil, err
+	var templates []MetaTemplate
+	after := ""
+	page := 0
+	for ; page < maxTemplateListPages; page++ {
+		url := baseURL
+		if after != "" {
+			url += "&after=" + neturl.QueryEscape(after)
+		}
+
+		respBody, err := c.doRequest(ctx, http.MethodGet, url, nil, account.AccessToken)
+		if err != nil {
+			c.Log.Error("Failed to fetch templates", "error", err)
+			return nil, err
+		}
+
+		var result TemplateListResponse
+		if err := json.Unmarshal(respBody, &result); err != nil {
+			return nil, fmt.Errorf("failed to parse response: %w", err)
+		}
+		templates = append(templates, result.Data...)
+
+		// Meta omits `paging.next` on the last page; an empty page ends the
+		// loop too, so a cursor that never clears cannot spin us.
+		if result.Paging == nil || result.Paging.Next == "" || result.Paging.Cursors.After == "" || len(result.Data) == 0 {
+			break
+		}
+		after = result.Paging.Cursors.After
+	}
+	if page == maxTemplateListPages {
+		c.Log.Warn("Template list truncated at page cap; some templates were not fetched",
+			"waba_id", account.BusinessID, "pages", maxTemplateListPages, "fetched", len(templates))
 	}
 
-	var result TemplateListResponse
-	if err := json.Unmarshal(respBody, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	c.Log.Info("Fetched templates from Meta", "count", len(result.Data))
-	return result.Data, nil
+	c.Log.Info("Fetched templates from Meta", "count", len(templates))
+	return templates, nil
 }
 
 // DeleteTemplate deletes a template from Meta's API

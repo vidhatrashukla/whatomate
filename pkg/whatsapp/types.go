@@ -120,7 +120,17 @@ type TemplateExample struct {
 
 // TemplateListResponse represents response from fetching templates
 type TemplateListResponse struct {
-	Data []MetaTemplate `json:"data"`
+	Data   []MetaTemplate `json:"data"`
+	Paging *MetaPaging    `json:"paging,omitempty"`
+}
+
+// MetaPaging is the cursor block Meta attaches to paginated list responses.
+type MetaPaging struct {
+	Cursors struct {
+		Before string `json:"before"`
+		After  string `json:"after"`
+	} `json:"cursors"`
+	Next string `json:"next,omitempty"`
 }
 
 // WebhookPayload represents the incoming webhook from Meta

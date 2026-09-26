@@ -479,11 +479,27 @@ func (a *App) SyncTemplates(r *fastglue.Request) error {
 		return r.SendErrorEnvelope(fasthttp.StatusNotFound, "WhatsApp account not found", nil, "")
 	}
 
-	// Fetch templates from Meta API
-	templates, err := a.fetchTemplatesFromMeta(account)
+	synced, err := a.syncTemplatesFromMeta(orgID, account)
 	if err != nil {
 		a.Log.Error("Failed to fetch templates from Meta", "error", err)
 		return r.SendErrorEnvelope(fasthttp.StatusBadGateway, "Failed to fetch templates from Meta", nil, "")
+	}
+
+	return r.SendEnvelope(map[string]any{
+		"message": fmt.Sprintf("Synced %d templates", synced),
+		"count":   synced,
+	})
+}
+
+// syncTemplatesFromMeta pulls the account's templates from Meta and upserts
+// them locally (matching on account + name + language, restoring soft-deleted
+// rows). It returns the number of templates processed. Shared by SyncTemplates
+// and MigrateTemplates.
+func (a *App) syncTemplatesFromMeta(orgID uuid.UUID, account *models.WhatsAppAccount) (int, error) {
+	// Fetch templates from Meta API
+	templates, err := a.fetchTemplatesFromMeta(account)
+	if err != nil {
+		return 0, err
 	}
 
 	// Sync to database
@@ -563,10 +579,7 @@ func (a *App) SyncTemplates(r *fastglue.Request) error {
 		synced++
 	}
 
-	return r.SendEnvelope(map[string]any{
-		"message": fmt.Sprintf("Synced %d templates", synced),
-		"count":   synced,
-	})
+	return synced, nil
 }
 
 func (a *App) fetchTemplatesFromMeta(account *models.WhatsAppAccount) ([]whatsapp.MetaTemplate, error) {

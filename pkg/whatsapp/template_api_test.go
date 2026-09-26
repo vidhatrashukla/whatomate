@@ -305,3 +305,45 @@ func TestClient_DeleteTemplate_APIError(t *testing.T) {
 	err := client.DeleteTemplate(context.Background(), account, "nonexistent")
 	require.Error(t, err)
 }
+
+// --- FetchTemplates pagination ---
+
+func TestClient_FetchTemplates_FollowsCursor(t *testing.T) {
+	t.Parallel()
+
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusOK)
+		if r.URL.Query().Get("after") == "" {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": []map[string]any{
+					{"id": "1", "name": "one", "language": "en", "status": "APPROVED"},
+					{"id": "2", "name": "two", "language": "en", "status": "APPROVED"},
+				},
+				"paging": map[string]any{
+					"cursors": map[string]string{"before": "b1", "after": "cursor-2"},
+					"next":    "https://graph.facebook.com/next-page",
+				},
+			})
+			return
+		}
+		assert.Equal(t, "cursor-2", r.URL.Query().Get("after"))
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{"id": "3", "name": "three", "language": "en", "status": "APPROVED"},
+			},
+			"paging": map[string]any{
+				"cursors": map[string]string{"before": "b2", "after": "cursor-3"},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server)
+	templates, err := client.FetchTemplates(context.Background(), testAccount(server.URL))
+	require.NoError(t, err)
+	require.Len(t, templates, 3)
+	assert.Equal(t, 2, calls)
+	assert.Equal(t, "three", templates[2].Name)
+}
